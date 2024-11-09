@@ -20,6 +20,7 @@ void osd_getinput(void) {
     {eadk_key_back, event_joypad1_a},
     {eadk_key_shift, event_joypad1_select},
     {eadk_key_backspace, event_joypad1_start},
+    {eadk_event_tangent, event_hard_reset},
   };
 
   static uint64_t old_keyboard_state = 0xffffffffffffffff;
