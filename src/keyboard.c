@@ -1,3 +1,4 @@
+#include "noftypes.h"
 #include <eadk.h>
 #undef false
 #undef true
@@ -27,10 +28,12 @@ void osd_getinput(void) {
     {eadk_key_shift, event_joypad1_select},
     {eadk_key_backspace, event_joypad1_start},
     {eadk_event_tangent, event_hard_reset},
-    {eadk_event_zero, event_state_save}
+    {eadk_event_sqrt, event_state_save},
+    {eadk_event_zero, event_state_save},
   };
 
-  static uint64_t old_keyboard_state = 0xffffffffffffffff;
+  static bool exitNextIteration=false;
+  static uint64_t old_keyboard_state = 0x0000000000000000;
   uint64_t current_keyboard_state = eadk_keyboard_scan();
 
 	//do_loadstate is set to a certain number on bootup, because for some reason loading the state
@@ -47,7 +50,15 @@ void osd_getinput(void) {
     if (isUp != wasUp) {
       event_t evt = event_get(key_to_events[i].event);
       evt(isUp ? INP_STATE_MAKE : INP_STATE_BREAK);
+
+      if (key_to_events[i].key == eadk_event_zero) {
+        exitNextIteration = true;
+      }
     }
+  }
+
+  if (exitNextIteration) {
+    event_get(event_quit)(INP_STATE_MAKE);
   }
 
   old_keyboard_state = current_keyboard_state;

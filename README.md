@@ -23,6 +23,8 @@ The controls are pretty obvious because the NES gamepad looks a lot like the Num
 |Select|Shift|
 |Start|Backspace|
 |Reset|Tangent|
+|Save state|Square Root|
+|Save state and exit|0|
 
 ## Build the app
 
