@@ -6,6 +6,12 @@
 #include <event.h>
 #include <nesinput.h>
 
+static int do_loadstate=0;
+
+void osd_queue_loadstate() {
+	do_loadstate=5;
+}
+
 void osd_getinput(void) {
   typedef struct {
     eadk_key_t key;
@@ -21,10 +27,19 @@ void osd_getinput(void) {
     {eadk_key_shift, event_joypad1_select},
     {eadk_key_backspace, event_joypad1_start},
     {eadk_event_tangent, event_hard_reset},
+    {eadk_event_zero, event_state_save}
   };
 
   static uint64_t old_keyboard_state = 0xffffffffffffffff;
   uint64_t current_keyboard_state = eadk_keyboard_scan();
+
+	//do_loadstate is set to a certain number on bootup, because for some reason loading the state
+	//doesn't work directly after boot-up. This causes it to wait for a few frames.
+	if (do_loadstate>0) do_loadstate--;
+	if (do_loadstate==1) {
+		event_get(event_state_slot_0)(INP_STATE_MAKE);
+		event_get(event_state_load)(INP_STATE_MAKE);
+	}
 
   for (int i=0; i<sizeof(key_to_events)/sizeof(key_to_events[0]); i++) {
     bool wasUp = eadk_keyboard_key_down(old_keyboard_state, key_to_events[i].key);

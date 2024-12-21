@@ -104,9 +104,11 @@ objs += $(addprefix output/, \
   display.o \
   sound.o \
   keyboard.o \
+  lz4.o \
   main.o \
   osd.o \
   statefile_wrapper.o \
+  storage.o \
   stubs.o \
 )
 

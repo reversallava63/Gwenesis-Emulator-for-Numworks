@@ -44,5 +44,6 @@ extern char *osd_newextension(char *string, char *ext);
 
 int main(int argc, char * argv[]) {
   eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_black);
+	osd_queue_loadstate();
   nofrendo_main(0, NULL);
 }
