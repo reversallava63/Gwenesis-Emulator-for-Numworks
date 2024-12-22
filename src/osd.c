@@ -28,6 +28,8 @@
 
 #include <version.h>
 
+#include <eadk.h>
+
 char configfilename[]="na";
 
 int osd_init() {
@@ -37,10 +39,59 @@ int osd_init() {
 void osd_shutdown() {
 }
 
+// CRC algorithm taken from https://barrgroup.com/blog/crc-series-part-3-crc-implementation-code-cc
+// We took the slow implementation to save memory, as we only need to compute it once
+/*
+ * The width of the CRC calculation and result.
+ * Modify the typedef for a 16 or 32-bit CRC standard.
+ */
+typedef uint32_t crc;
+
+#define WIDTH  (8 * sizeof(crc))
+#define TOPBIT (1 << (WIDTH - 1))
+#define POLYNOMIAL 0x04C11DB7
+
+crc crcSlow(uint8_t const message[], int nBytes) {
+    crc  remainder = 0;
+    /*
+     * Perform modulo-2 division, a byte at a time.
+     */
+    for (int byte = 0; byte < nBytes; ++byte) {
+        /*
+         * Bring the next byte into the remainder.
+         */
+        remainder ^= (message[byte] << (WIDTH - 8));
+
+        /*
+         * Perform modulo-2 division, a bit at a time.
+         */
+        for (uint8_t bit = 8; bit > 0; --bit) {
+            /*
+             * Try to divide the current data bit.
+             */
+            if (remainder & TOPBIT) {
+                remainder = (remainder << 1) ^ POLYNOMIAL;
+            } else {
+                remainder = (remainder << 1);
+            }
+        }
+    }
+
+    /*
+     * The final remainder is the CRC result.
+     */
+    return (remainder);
+}   /* crcSlow() */
+
+
 /* This is os-specific part of main() */
 int osd_main(int argc, char *argv[]) {
   config.filename = configfilename;
-  return main_loop("builtin", system_autodetect);
+  uint32_t crc = crcSlow(eadk_external_data, eadk_external_data_size);
+  char crcHex[4];
+  sprintf(crcHex, "%08x",  crc);
+
+  return main_loop(crcHex, system_autodetect);
 }
 
 void osd_getmouse(int *x, int *y, int *button) {
