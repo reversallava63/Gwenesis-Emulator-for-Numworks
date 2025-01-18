@@ -1,14 +1,14 @@
 # Nofrendo
 
-[![Build](https://github.com/nwagyu/nofrendo/actions/workflows/build.yml/badge.svg)](https://github.com/nwagyu/nofrendo/actions/workflows/build.yml)
-
 This app is a [NES](https://en.wikipedia.org/wiki/Nintendo_Entertainment_System) emulator that runs on the [NumWorks calculator](https://www.numworks.com).
+
+Available on [Nwagyu](https://yaya-cout.github.io/Nwagyu/)
 
 ## Install the app
 
 To install this app, you'll need to:
 
-1. Download the latest `nofrendo.nwa` file from the [Releases](https://github.com/nwagyu/nofrendo/releases) page
+1. Download the latest `nofrendo.nwa` file from the [Releases](https://codeberg.org/Yaya-Cout/nofrendo/releases) page
 2. Extract a `cartridge.nes` ROM dump from your NES cartridge, or, alternatively, use the provided `src/2048.nes` file.
 3. Head to [my.numworks.com/apps](https://my.numworks.com/apps) to send the `nwa` file on your calculator along the `nes` file.
 
