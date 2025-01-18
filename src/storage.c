@@ -99,8 +99,9 @@ const char * extapp_fileRead(const char * filename, size_t * len) {
     if (strcmp(name, filename) == 0) {
       // filename + \0
       uint16_t nameSize = strlen(name) + 1;
-      // Size contains filename + real content. Here, we only want the content
-      *len = size - nameSize;
+      // Size contains size + filename + real content. Here, we only want the
+      // content
+      *len = size - 2      - nameSize;
       //     offset + size + filename
       return offset + 2    + nameSize;
     }
@@ -128,8 +129,8 @@ bool extapp_fileWrite(const char * filename, const char * content, size_t len) {
 
   // We have enough storage, so we can write the data
   // Write size :
-  // filename + \0 + content
-  const uint16_t totalSize = strlen(filename) + 1 + len;
+  // size + filename + \0 + content
+  const uint16_t totalSize = 2 + strlen(filename) + 1 + len;
   *(uint16_t *)writableRecordStartPointer = totalSize;
 
   // Write filename:
