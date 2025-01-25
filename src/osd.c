@@ -88,7 +88,7 @@ crc crcSlow(uint8_t const message[], int nBytes) {
 int osd_main(int argc, char *argv[]) {
   config.filename = configfilename;
   uint32_t crc = crcSlow(eadk_external_data, eadk_external_data_size);
-  char crcHex[4];
+  char crcHex[9];
   sprintf(crcHex, "%08x",  crc);
 
   return main_loop(crcHex, system_autodetect);
