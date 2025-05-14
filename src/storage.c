@@ -15,6 +15,7 @@ inline uint32_t reverse32(uint32_t value) {
 }
 
 
+// This function takes extension for compatibility reasons, but ignores it
 int extapp_fileList(const char ** filename, int maxrecord, const char * extension) {
   uint32_t storageAddress = extapp_address();
   char * offset = (char *)storageAddress;
@@ -39,6 +40,39 @@ int extapp_fileList(const char ** filename, int maxrecord, const char * extensio
 
     offset += size;
     currentRecord++;
+  }
+
+  return currentRecord;
+}
+
+int extapp_fileListWithExtension(const char ** filename, int maxrecord, const char * extension_to_match) {
+  uint32_t storageAddress = extapp_address();
+  char * offset = (char *)storageAddress;
+  const char * endAddress = (char *)extapp_size() + storageAddress;
+
+  if (!extapp_isValid((const uint32_t *)offset)) {
+    // Storage is invalid
+    return -1;
+  }
+
+  offset += 4;
+  int currentRecord = 0;
+
+
+  while ((currentRecord < maxrecord) && offset < endAddress) {
+    uint16_t size = *(uint16_t *)offset;
+    if (size == 0) {
+      break;
+    }
+    char * name = offset + 2;
+
+    char * extension = strrchr(name, '.') + 1;
+    if (strcmp(extension, extension_to_match) == 0) {
+      filename[currentRecord] = name;
+      currentRecord++;
+    }
+
+    offset += size;
   }
 
   return currentRecord;
@@ -117,8 +151,8 @@ bool extapp_fileWrite(const char * filename, const char * content, size_t len) {
   // Check if we have enough free space
   const uint32_t * recordStartPointer = extapp_nextFree();
   //                                                          Start Address  + size +     filename     + \0 + content
-  const uint32_t * recordEndPointer = (uint32_t *)((char *)recordStartPointer + 2 + strlen(filename) + 1 + len);
-  const uint32_t * storageEndPointer = extapp_address() + extapp_nextFree();
+  const uint32_t * recordEndPointer = (uint32_t *)((char *)recordStartPointer + strlen(filename) + 1 + len);
+  const uint32_t * storageEndPointer = (uint32_t *)(size_t)((void *)extapp_address() + extapp_size());
 
   // In case where we have overflown storage, we return an error
   if (storageEndPointer < recordEndPointer) {
@@ -181,12 +215,10 @@ bool extapp_fileErase(const char * filename) {
   const uint16_t len =  *(uint16_t *)offset;
 
   // Move the rest of the data
-  // Why not len + 2 ?
   char * nextFree = (char *)extapp_nextFree();
   memmove(offset, offset + len, nextFree - offset);
 
   // Overwrite the rest of the storage with zeroes
-  // the + 1 in len + 1 is for the uint16_t used for file size
   memset(nextFree - len, 0, len);
 
   return true;
@@ -225,7 +257,7 @@ const uint32_t * extapp_nextFree() {
   }
 
   // If we exited the loop, it mean that we have gone out of the storage
-  return (uint32_t *)storageAddress + extapp_size();
+  return (uint32_t *)endAddress;
 }
 
 const uint32_t extapp_used() {
