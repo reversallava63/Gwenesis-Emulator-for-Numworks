@@ -25,6 +25,9 @@ FILE * statefile_fopen(const char *pathname, const char *mode) {
 	if (mode[0]=='r') {
 		if (!extapp_fileExists(pathname)) goto err;
 		s->fd = malloc((size_t)MAX_FILE_SIZE);
+		if (s->fd == NULL) {
+			goto err;
+		}
 		size_t len = 0;
 		const char *compressed_data = extapp_fileRead(pathname, &len);
 		const int decompressed_size = LZ4_decompress_safe(compressed_data, s->fd,
@@ -37,6 +40,9 @@ FILE * statefile_fopen(const char *pathname, const char *mode) {
 	} else if (mode[0]=='w') {
 		extapp_fileErase(pathname);
 		s->fd=calloc(MAX_FILE_SIZE, 1);
+		if (s->fd == NULL) {
+			goto err;
+		}
 		s->isWrite=1;
 	} else {
 		goto err;
@@ -52,6 +58,11 @@ int statefile_fclose(FILE *stream) {
   	statefile_desc_t *s=(statefile_desc_t*)stream;
 	if (s->isWrite) {
 		char* compressed_data = malloc((size_t) MAX_SCRIPTSTORE_SIZE);
+		if (compressed_data == NULL) {
+			free(s->fd);
+			free(s);
+			return 1;
+		}
 		const int compressed_data_size = LZ4_compress_default(s->fd, compressed_data,
 			MAX_FILE_SIZE, MAX_SCRIPTSTORE_SIZE);
 		if(compressed_data_size > 0) {
