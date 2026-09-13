@@ -3,178 +3,160 @@
  * Target Hardware: Numworks N0120 (STM32H725 @ 320KB RAM, 320x240 LCD)
  * 
  * Merged from:
- * 1. nwagyu/nofrendo EADK wrapper skeleton
+ * 1. nwagyu/nofrendo EADK wrapper skeleton (main.c, video.c, input.c)
  * 2. retro-go gwenesis frame execution loop
  */
 
 #include <eadk.h>
+#undef false
+#undef true
+#undef bool
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 
-// EADK App Metadata (Declared for Epsilon/nwlink packaging)
-const char eadk_app_name[] = "Gwenesis MD";
-const uint32_t eadk_app_api_level = 0;
+// EADK App Metadata (Declared with exact section attributes for Epsilon/nwlink)
+const char eadk_app_name[] __attribute__((section(".rodata.eadk_app_name"))) = "Gwenesis MD";
+const uint32_t eadk_api_level __attribute__((section(".rodata.eadk_api_level"))) = 0;
 
-// Symbol linked by nwlink at compile/install time containing embedded ROM
+// Symbol linked by nwlink containing embedded Genesis ROM in Flash memory
 extern const uint8_t eadk_external_data[];
-extern const size_t eadk_external_data_size;
 
 // ---------------------------------------------------------------------------
-// Gwenesis Core Stubs & Definitions
-// (Normally provided by gwenesis/src/ headers)
+// Gwenesis Core Declarations (from gwenesis retro-go core)
 // ---------------------------------------------------------------------------
-#define GENESIS_WIDTH  320
-#define GENESIS_HEIGHT 224
-#define NUMWORKS_WIDTH 320
-#define NUMWORKS_HEIGHT 240
-#define Y_OFFSET       ((NUMWORKS_HEIGHT - GENESIS_HEIGHT) / 2) // 8 pixels
+#define VDP_CYCLES_PER_LINE  488
+#define LINES_PER_FRAME_NTSC 262
+#define LINES_PER_FRAME_PAL  313
+#define STATUS_VIRQPENDING   0x0080
 
-// Genesis Controller Button Masks
-#define PAD_UP     (1 << 0)
-#define PAD_DOWN   (1 << 1)
-#define PAD_LEFT   (1 << 2)
-#define PAD_RIGHT  (1 << 3)
-#define PAD_A      (1 << 4)
-#define PAD_B      (1 << 5)
-#define PAD_C      (1 << 6)
-#define PAD_START  (1 << 7)
+extern unsigned char gwenesis_vdp_regs[0x20];
+extern unsigned int gwenesis_vdp_status;
+extern unsigned short CRAM565[256];
+extern unsigned int screen_width, screen_height;
+extern int system_clock, scan_line, hint_pending;
 
-// Simulated Gwenesis state structs
-typedef struct {
-  uint8_t *rom_ptr;
-  size_t rom_size;
-  uint16_t pad_state;
-  bool is_pal;
-  uint16_t frame_buffer[GENESIS_WIDTH * GENESIS_HEIGHT]; // RGB565 buffer (143.3 KB)
-} gwenesis_t;
+// Core functions
+extern void load_cartridge(const void *data, size_t size);
+extern void power_on(void);
+extern void reset_emulation(void);
+extern void m68k_run(int cycles);
+extern void gwenesis_vdp_set_buffer(void *buffer);
+extern void gwenesis_vdp_render_config(void);
+extern void gwenesis_vdp_render_line(int line);
+extern void gwenesis_io_pad_press_button(int pad, int button);
+extern void gwenesis_io_pad_release_button(int pad, int button);
 
-static gwenesis_t g_emulator;
+// Single 320x224 RGB565 Framebuffer (143.36 KB in SRAM)
+static uint16_t g_framebuffer[320 * 224];
 
-// Gwenesis function declarations (from gwenesis core)
-extern void gwenesis_init(void);
-extern void gwenesis_reset(void);
-extern void gwenesis_load_rom(const uint8_t *data, size_t size);
-extern void gwenesis_set_pad(uint8_t pad_num, uint16_t state);
-extern void gwenesis_run_frame(uint16_t *framebuffer_rgb565);
-
-// ---------------------------------------------------------------------------
-// Helper: Poll Numworks Keyboard via EADK
-// ---------------------------------------------------------------------------
-static uint16_t poll_keyboard_inputs(void) {
-  eadk_keyboard_state_t keys = eadk_keyboard_scan();
-  uint16_t pad = 0;
-
-  // D-Pad navigation
-  if (eadk_keyboard_key_down(keys, EADK_KEY_UP))    pad |= PAD_UP;
-  if (eadk_keyboard_key_down(keys, EADK_KEY_DOWN))  pad |= PAD_DOWN;
-  if (eadk_keyboard_key_down(keys, EADK_KEY_LEFT))  pad |= PAD_LEFT;
-  if (eadk_keyboard_key_down(keys, EADK_KEY_RIGHT)) pad |= PAD_RIGHT;
-
-  // Genesis Buttons (Mapped to Numworks Keys)
-  // OK key -> Button A
-  if (eadk_keyboard_key_down(keys, EADK_KEY_OK))   pad |= PAD_A;
-  // Back/Ans key -> Button B
-  if (eadk_keyboard_key_down(keys, EADK_KEY_BACK)) pad |= PAD_B;
-  // EXE key -> Button C
-  if (eadk_keyboard_key_down(keys, EADK_KEY_EXE))  pad |= PAD_C;
-  // Shift / Alpha -> Start
-  if (eadk_keyboard_key_down(keys, EADK_KEY_ALPHA) || 
-      eadk_keyboard_key_down(keys, EADK_KEY_SHIFT)) pad |= PAD_START;
-
-  return pad;
+// Dummy rand override to avoid newlib heap allocation
+int rand(void) {
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
-// Helper: Render Framebuffer to LCD via EADK
+// Helper: Poll Numworks Keyboard via EADK keyboard scan
 // ---------------------------------------------------------------------------
-static void render_frame_to_display(const uint16_t *rgb565_buffer) {
-  // Push 320x224 RGB565 rectangle centered on the 320x240 screen
-  eadk_rect_t display_rect = {
-    .x = 0,
-    .y = Y_OFFSET,
-    .w = GENESIS_WIDTH,
-    .h = GENESIS_HEIGHT
+static void poll_keyboard_inputs(uint64_t *old_state) {
+  uint64_t current_state = eadk_keyboard_scan();
+
+  // Genesis 3-Button Keymap Mapping
+  typedef struct {
+    eadk_key_t key;
+    int genesis_button;
+  } key_map_t;
+
+  const key_map_t map[] = {
+    {eadk_key_up,        0}, // Up
+    {eadk_key_down,      1}, // Down
+    {eadk_key_left,      2}, // Left
+    {eadk_key_right,     3}, // Right
+    {eadk_key_ok,        4}, // Button A
+    {eadk_key_back,      5}, // Button B
+    {eadk_key_exe,       6}, // Button C
+    {eadk_key_backspace, 7}, // Start
+    {eadk_key_shift,     7}  // Start (Alt)
   };
 
-  // eadk_display_push_rect transfers pixel block directly to STM32 LCD driver
-  eadk_display_push_rect(display_rect, (const eadk_color_t *)rgb565_buffer);
+  for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+    bool wasDown = eadk_keyboard_key_down(*old_state, map[i].key);
+    bool isDown = eadk_keyboard_key_down(current_state, map[i].key);
+
+    if (isDown != wasDown) {
+      if (isDown) {
+        gwenesis_io_pad_press_button(0, map[i].genesis_button);
+      } else {
+        gwenesis_io_pad_release_button(0, map[i].genesis_button);
+      }
+    }
+  }
+
+  *old_state = current_state;
 }
 
 // ---------------------------------------------------------------------------
-// Main Application Loop
+// Main EADK Entry Point
 // ---------------------------------------------------------------------------
 int main(int argc, char *argv[]) {
-  // Clear screen to dark background first
-  eadk_rect_t full_screen = {0, 0, NUMWORKS_WIDTH, NUMWORKS_HEIGHT};
-  eadk_display_push_rect_uniform(full_screen, 0x1082); // Dark slate RGB565
+  // Clear LCD screen to black
+  eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_black);
 
-  // Display boot splash status
-  eadk_point_t status_pos = {10, 10};
-  eadk_display_draw_string(
-    "Gwenesis EADK Booting...",
-    status_pos,
-    true, // Large font
-    0xFFFF, // White text
-    0x1082  // Dark bg
-  );
-
-  // 1. Verify external ROM data presence linked by nwlink
-  if (&eadk_external_data[0] == NULL) {
-    eadk_point_t err_pos = {10, 50};
-    eadk_display_draw_string(
-      "ERROR: No ROM linked in eadk_external_data!",
-      err_pos,
-      false,
-      0xF800, // Red
-      0x1082
-    );
-    while (1) {
-      eadk_keyboard_state_t keys = eadk_keyboard_scan();
-      if (eadk_keyboard_key_down(keys, EADK_KEY_HOME)) break;
-    }
+  // 1. Verify external ROM address from eadk_external_data
+  if (eadk_external_data == NULL) {
     return 1;
   }
 
-  // 2. Initialize Gwenesis Core (M68K CPU, VDP Registers, Memory Bus)
-  gwenesis_init();
+  // 2. Load Cartridge & Power On
+  load_cartridge(eadk_external_data, 0);
+  power_on();
+  reset_emulation();
 
-  // 3. Mount Cartridge ROM directly from Flash pointer (zero RAM copy!)
-  // Note: eadk_external_data is stored in Flash memory by Epsilon app loader
-  gwenesis_load_rom(eadk_external_data, 0 /* Auto-detect ROM size */);
-  gwenesis_reset();
+  // 3. Configure VDP buffer
+  gwenesis_vdp_set_buffer((void *)g_framebuffer);
 
-  // 4. Main Emulation Loop
-  uint32_t frame_count = 0;
+  uint64_t old_keyboard_state = 0;
   bool running = true;
 
+  // 4. Gwenesis Frame Execution Loop (Adapted from retro-go main.c)
   while (running) {
-    // A. Check for exit button (Home or Back long-press)
-    eadk_keyboard_state_t keys = eadk_keyboard_scan();
-    if (eadk_keyboard_key_down(keys, EADK_KEY_HOME)) {
-      running = false;
+    // Poll keyboard inputs
+    poll_keyboard_inputs(&old_keyboard_state);
+
+    // Check for exit trigger (Back + Home chord or Home key)
+    if (eadk_keyboard_key_down(old_keyboard_state, eadk_key_home)) {
       break;
     }
 
-    // B. Poll Joypad Inputs
-    uint16_t pad_state = poll_keyboard_inputs();
-    gwenesis_set_pad(0, pad_state);
+    int lines_per_frame = LINES_PER_FRAME_NTSC;
+    screen_width = 320;
+    screen_height = 224;
 
-    // C. Execute 1 Genesis Frame (M68K CPU + VDP scanlines)
-    // Audio synthesis is bypassed to maintain 60 FPS on Cortex-M7
-    gwenesis_run_frame(g_emulator.frame_buffer);
+    gwenesis_vdp_render_config();
 
-    // D. Push Framebuffer to LCD
-    render_frame_to_display(g_emulator.frame_buffer);
+    system_clock = 0;
+    scan_line = 0;
 
-    frame_count++;
+    // Line-by-line M68K CPU + VDP scanline loop
+    while (scan_line < lines_per_frame) {
+      m68k_run(system_clock + VDP_CYCLES_PER_LINE);
 
-    // Optional: Framerate pacing / sync with EADK timer if needed
-    // eadk_timing_usleep(16666); // ~60 FPS
+      if (scan_line < screen_height) {
+        gwenesis_vdp_render_line(scan_line);
+      }
+
+      scan_line++;
+      system_clock += VDP_CYCLES_PER_LINE;
+    }
+
+    // Push 320x224 frame centered on 320x240 LCD (8px y-offset)
+    const int yoffset = (EADK_SCREEN_HEIGHT - 224) / 2;
+    eadk_rect_t rect = {0, (uint16_t)yoffset, 320, 224};
+    eadk_display_push_rect(rect, (const eadk_color_t *)g_framebuffer);
   }
 
-  // Cleanup & return to Epsilon OS
   return 0;
 }
