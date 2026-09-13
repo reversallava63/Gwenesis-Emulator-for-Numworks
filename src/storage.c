@@ -84,13 +84,10 @@ bool extapp_fileExists(const char * filename) {
   const char * endAddress = (char *)(extapp_size() + storageAddress);
 
   if (!extapp_isValid((const uint32_t *)offset)) {
-    // Storage is invalid
     return false;
   }
 
   offset += 4;
-  int currentRecord = 0;
-
 
   while (offset < endAddress) {
     uint16_t size = *(uint16_t *)offset;
@@ -100,12 +97,10 @@ bool extapp_fileExists(const char * filename) {
     char * name = offset + 2;
 
     if (strcmp(name, filename) == 0) {
-      // File was found
       return true;
     }
 
     offset += size;
-    currentRecord++;
   }
 
   return false;

@@ -15,6 +15,14 @@
 
 #include "m68k.h"
 
+/* Diagnostic (frame-1313 freeze investigation) - defined in m68kcpu.c.
+ * See comment above m68ki_set_address_error_trap() below. */
+extern unsigned int gwenesis_diag_aerr_count;
+extern unsigned int gwenesis_diag_aerr_first_addr;
+extern unsigned int gwenesis_diag_aerr_first_fc;
+extern unsigned int gwenesis_diag_aerr_first_write;
+extern unsigned int gwenesis_diag_aerr_first_pc;
+
 /* ======================================================================== */
 /* ============================ GENERAL DEFINES =========================== */
 /* ======================================================================== */
@@ -311,9 +319,26 @@
 
 /* Enable or disable Address error emulation */
 #if M68K_EMULATE_ADDRESS_ERROR
+  /* Diagnostic (frame-1313 freeze investigation): gwenesis_diag_aerr_count
+   * is a GLOBAL, never reset by this macro or by m68k_run()'s local
+   * gwenesis_diag_iter_count - so unlike that counter, it survives every
+   * longjmp back to this setjmp point. If the freeze is really an
+   * address-error -> longjmp -> address-error loop, this will climb into
+   * the thousands+ while the per-call watchdog stays stuck near 0.
+   * gwenesis_diag_aerr_first_addr/fc/write_mode capture the FIRST fault
+   * only (guarded by the count check) so we see the address that started
+   * the loop, not whatever it's degenerated into by the time we read it. */
   #define m68ki_set_address_error_trap() \
     if(setjmp(m68ki_cpu.aerr_trap) != 0) \
     { \
+      gwenesis_diag_aerr_count++; \
+      if (gwenesis_diag_aerr_count == 1) \
+      { \
+        gwenesis_diag_aerr_first_addr = m68ki_cpu.aerr_address; \
+        gwenesis_diag_aerr_first_fc = m68ki_cpu.aerr_fc; \
+        gwenesis_diag_aerr_first_write = m68ki_cpu.aerr_write_mode; \
+        gwenesis_diag_aerr_first_pc = REG_PC; \
+      } \
       m68ki_exception_address_error(); \
     }
 

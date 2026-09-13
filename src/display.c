@@ -1,123 +1,142 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * Gwenesis Display Driver for Numworks Calculator (EADK Port)
+ * Target Screen: 320x240 16-bit RGB565 LCD
+ */
 
 #include <eadk.h>
-#undef false
-#undef true
-#undef bool
-#include <osd.h>
-#include <bitmap.h>
-#include <nes.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 
-#define  DEFAULT_WIDTH        256
-#define  DEFAULT_HEIGHT       NES_VISIBLE_HEIGHT
+#include "display.h"
 
-static int init(int width, int height);
-static void shutdown(void);
-static int set_mode(int width, int height);
-static void set_palette(rgb_t *pal);
-static void clear(uint8 color);
-static bitmap_t *lock_write(void);
-static void free_write(int num_dirties, rect_t *dirty_rects);
-static void custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects);
-static char fb[1]; //dummy
+#define SCREEN_WIDTH  320
+#define SCREEN_HEIGHT 240
 
-viddriver_t pkspDriver =
-{
-   "video",       /* name */
-   init,          /* init */
-   shutdown,      /* shutdown */
-   set_mode,      /* set_mode */
-   set_palette,   /* set_palette */
-   clear,         /* clear */
-   lock_write,    /* lock_write */
-   free_write,    /* free_write */
-   custom_blit,   /* custom_blit */
-   false          /* invalidate flag */
-};
+static display_scale_mode_t g_scale_mode = SCALE_CENTER_LETTERBOX;
+static uint16_t g_line_buffer[SCREEN_WIDTH]; // Scratch buffer for horizontal scaling
 
-bitmap_t *myBitmap;
-
-void osd_getvideoinfo(vidinfo_t *info) {
-   info->default_width = DEFAULT_WIDTH;
-   info->default_height = DEFAULT_HEIGHT;
-   info->driver = &pkspDriver;
+// Initialize display and clear borders to solid black
+void display_init(void) {
+  eadk_rect_t full_screen = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
+  eadk_display_push_rect_uniform(full_screen, 0x0000); // Black RGB565
 }
 
-/* initialise video */
-static int init(int width, int height) {
-	return 0;
+// Set active display scaling mode
+void display_set_scaling_mode(display_scale_mode_t mode) {
+  g_scale_mode = mode;
+  // Clear screen to erase leftover pillarbox/letterbox artifacts
+  display_init();
 }
 
-static void shutdown(void) {
+/*
+ * Blit H40 Mode (320x224) directly to LCD
+ * 320px matches Numworks LCD width exactly.
+ * 224px height leaves 16px vertical space (8px top, 8px bottom).
+ */
+static void blit_h40_direct(const uint16_t *vdp_buffer, int height) {
+  int y_offset = (SCREEN_HEIGHT - height) / 2; // (240 - 224) / 2 = 8
+  
+  eadk_rect_t rect = {
+    .x = 0,
+    .y = (uint16_t)y_offset,
+    .width = 320,
+    .height = (uint16_t)height
+  };
+
+  // Push full 320x224 frame to LCD controller via DMA
+  eadk_display_push_rect(rect, (const eadk_color_t *)vdp_buffer);
 }
 
-/* set a video mode */
-static int set_mode(int width, int height) {
-	return 0;
+/*
+ * Blit H32 Mode (256x224) with 1:1 centering (Pillarboxed)
+ * 256px width leaves 64px horizontal space (32px left, 32px right).
+ */
+static void blit_h32_centered(const uint16_t *vdp_buffer, int height) {
+  int x_offset = (SCREEN_WIDTH - 256) / 2;    // (320 - 256) / 2 = 32
+  int y_offset = (SCREEN_HEIGHT - height) / 2; // (240 - 224) / 2 = 8
+
+  eadk_rect_t rect = {
+    .x = (uint16_t)x_offset,
+    .y = (uint16_t)y_offset,
+    .width = 256,
+    .height = (uint16_t)height
+  };
+
+  eadk_display_push_rect(rect, (const eadk_color_t *)vdp_buffer);
 }
 
-static uint16 myPalette[256];
+/*
+ * Blit H32 Mode (256x224) stretched horizontally to 320px
+ * Uses 5:4 fast expansion (duplicates 1 pixel every 4 source pixels):
+ * Src [0 1 2 3] -> Dst [0 1 2 3 3]
+ */
+static void blit_h32_stretched(const uint16_t *vdp_buffer, int height) {
+  int y_offset = (SCREEN_HEIGHT - height) / 2;
 
-/* copy nes palette over to hardware */
-static void set_palette(rgb_t *pal) {
-   for (int i = 0; i < 256; i++) {
-      myPalette[i] = (pal[i].b>>3)+((pal[i].g>>2)<<5)+((pal[i].r>>3)<<11);
-   }
+  // Process scanline by scanline
+  for (int y = 0; y < height; y++) {
+    const uint16_t *src_line = &vdp_buffer[y * 256];
+    
+    // Fast 256px -> 320px integer expansion loop
+    int dst_idx = 0;
+    for (int x = 0; x < 256; x += 4) {
+      g_line_buffer[dst_idx++] = src_line[x];
+      g_line_buffer[dst_idx++] = src_line[x + 1];
+      g_line_buffer[dst_idx++] = src_line[x + 2];
+      g_line_buffer[dst_idx++] = src_line[x + 3];
+      g_line_buffer[dst_idx++] = src_line[x + 3]; // Repeat 4th pixel
+    }
+
+    // Push single stretched scanline to LCD
+    eadk_rect_t line_rect = {
+      .x = 0,
+      .y = (uint16_t)(y_offset + y),
+      .width = 320,
+      .height = 1
+    };
+    eadk_display_push_rect(line_rect, (const eadk_color_t *)g_line_buffer);
+  }
 }
 
-void vid_setpalette(rgb_t *pal) {
-   set_palette(pal);
+/*
+ * Primary Gwenesis Display Push API
+ * Called at the end of every VDP frame step in gwenesis_run_frame()
+ */
+void display_push_gwenesis_frame(const uint16_t *vdp_buffer, int vdp_width, int vdp_height) {
+  if (!vdp_buffer) return;
+
+  // H40 Mode (320 pixels wide)
+  if (vdp_width == 320) {
+    blit_h40_direct(vdp_buffer, vdp_height);
+  }
+  // H32 Mode (256 pixels wide)
+  else if (vdp_width == 256) {
+    if (g_scale_mode == SCALE_H32_STRETCH_320) {
+      blit_h32_stretched(vdp_buffer, vdp_height);
+    } else {
+      blit_h32_centered(vdp_buffer, vdp_height);
+    }
+  }
+  // Fallback for custom or PAL resolutions
+  else {
+    eadk_rect_t rect = {0, 0, (uint16_t)vdp_width, (uint16_t)vdp_height};
+    eadk_display_push_rect(rect, (const eadk_color_t *)vdp_buffer);
+  }
 }
 
-/* clear all frames to a particular color */
-static void clear(uint8 color) {
-}
+// Draw OSD FPS counter at bottom of LCD
+void display_draw_fps(float fps, uint32_t frame_num) {
+  char text[32];
+  snprintf(text, sizeof(text), "%2.1f FPS | F:%lu", fps, frame_num);
 
-/* acquire the directbuffer for writing */
-static bitmap_t *lock_write(void) {
-   myBitmap = bmp_createhw((uint8*)fb, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH*2);
-   return myBitmap;
-}
-
-/* release the resource */
-static void free_write(int num_dirties, rect_t *dirty_rects) {
-   bmp_destroy(&myBitmap);
-}
-
-static void custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects) {
-	uint16_t line[bmp->width];
-	int xoffset = (EADK_SCREEN_WIDTH - bmp->width) / 2;
-	int yoffset = (EADK_SCREEN_HEIGHT - bmp->height) / 2;
-
-	for(int y=0; y<bmp->height; y++) {
-		for(int x=0; x<bmp->width; x++) {
-			line[x] = myPalette[bmp->line[y][x]];
-		}
-		eadk_display_push_rect((eadk_rect_t){xoffset, y+yoffset, bmp->width, 1}, line);
-	}
-}
-
-void ppu_scanline_blit(uint8_t *bmp, int scanline, bool draw_flag) {
-	uint16_t line[NES_SCREEN_WIDTH];
-	const int xoffset = (EADK_SCREEN_WIDTH - NES_SCREEN_WIDTH) / 2;
-	const int yoffset = (EADK_SCREEN_HEIGHT - NES_SCREEN_HEIGHT) / 2;
-	bmp += 8;
-	if(draw_flag && !(scanline < 0 || scanline >= EADK_SCREEN_HEIGHT)) {
-		for(int x=0; x<NES_SCREEN_WIDTH; x++) {
-			line[x] = myPalette[*bmp++];
-		}
-		eadk_display_push_rect((eadk_rect_t){xoffset, scanline+yoffset, NES_SCREEN_WIDTH, 1}, line);
-	}
+  eadk_point_t pt = {4, 228}; // Bottom 12px letterbox area
+  eadk_display_draw_string(
+    text,
+    pt,
+    false,  // Small font
+    0x07E0, // Bright Green RGB565
+    0x0000  // Black background
+  );
 }

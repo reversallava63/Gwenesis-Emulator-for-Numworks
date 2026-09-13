@@ -31,6 +31,9 @@ __license__ = "GPLv3"
 
 #include <assert.h>
 
+// Suppress any accidental printf that might remain
+#define printf(...) do{}while(0)
+
 #if GNW_TARGET_MARIO !=0 || GNW_TARGET_ZELDA!=0
   #pragma GCC optimize("Ofast")
 #endif
@@ -466,7 +469,8 @@ void gwenesis_vdp_dma_fill(unsigned short value)
     } while (--dma_length);
     break;
   default:
-    printf("Invalid code during DMA fill\n");
+    // printf("Invalid code during DMA fill\n");  // removed debug
+    break;
   }
 
 
@@ -740,7 +744,7 @@ unsigned int gwenesis_vdp_read_data_port_16()
 
             return value;
         default:
-            printf("unhandled gwenesis_vdp_read_data_port_16(%x)\n", address_reg);
+            // printf("unhandled gwenesis_vdp_read_data_port_16(%x)\n", address_reg); // removed debug
             return 0xFF;
         }
    // }
@@ -881,7 +885,8 @@ void gwenesis_vdp_write_data_port_16(unsigned int value)
         case 0x9: // VDP FIFO TEST
             break;
         default:
-            printf("VDP Data Port invalid");
+            // printf("VDP Data Port invalid"); // removed debug
+            break;
         }
 
     /* if a DMA is scheduled, do it */
@@ -987,8 +992,7 @@ void gwenesis_vdp_write_memory_16(unsigned int address, unsigned int value) {
     return;
   }
   // UNHANDLED
-  printf("unhandled gwenesis_vdp_write(%x, %x)\n", address, value);
-
+  // printf("unhandled gwenesis_vdp_write(%x, %x)\n", address, value); // removed debug
 }
 
 void gwenesis_vdp_mem_save_state() {

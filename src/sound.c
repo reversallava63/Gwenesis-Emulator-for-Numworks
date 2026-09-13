@@ -1,11 +1,20 @@
-#include <osd.h>
+/*
+ * Sound Driver / Stub for Gwenesis Numworks EADK
+ * Audio hardware is stubbed on EADK to conserve Cortex-M7 cycles.
+ */
 
-#define DEFAULT_SAMPLERATE 22050
+#include <eadk.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-void osd_setsound(void (*playfunc)(void *buffer, int length)) {
+void sound_init(void) {
+  // Audio stub: Numworks EADK API does not expose hardware DAC/PCM output
 }
 
-void osd_getsoundinfo(sndinfo_t *info) {
-  info->sample_rate = DEFAULT_SAMPLERATE;
-  info->bps = 8;
+void sound_update(void) {
+  // Dummy audio frame update
+}
+
+void sound_close(void) {
+  // Dummy audio cleanup
 }

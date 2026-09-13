@@ -36,6 +36,35 @@ static int irq_latency;
 
 m68ki_cpu_core m68k;
 
+/* Diagnostic watchdog (frame-1313 freeze investigation): a single
+ * m68k_run() call should never need more than a few hundred instructions
+ * to burn one scanline's worth of cycles. If it ever needs an enormous
+ * number, either something never advances m68k.cycles (stuck fetching
+ * the same PC / a self-loop) or PC keeps moving but cycle accounting is
+ * broken. Either way, this is not a legitimate long-running frame - it's
+ * the freeze. Trip, capture evidence, and bail out rather than hanging
+ * forever. Globals are read (not reset) from main.c after each frame. */
+unsigned int gwenesis_diag_stuck_pc = 0;
+unsigned int gwenesis_diag_stuck_ir = 0;
+unsigned int gwenesis_diag_stuck_iters = 0;
+int gwenesis_diag_stuck_tripped = 0;
+#define GWENESIS_DIAG_WATCHDOG_LIMIT 50000
+
+/* Diagnostic (frame-1313 freeze investigation): unlike gwenesis_diag_stuck_*
+ * above, these are updated from inside m68ki_set_address_error_trap() in
+ * m68kcpu.h - specifically INSIDE the setjmp catch block, meaning they are
+ * NOT reset by longjmp (the local gwenesis_diag_iter_count in m68k_run()
+ * below IS reset every longjmp, since it's declared after the setjmp
+ * point - that's the whole point of adding these). If the freeze is an
+ * infinite address-error/longjmp cycle, gwenesis_diag_aerr_count will
+ * climb far past the ~few-hundred-per-frame that is normal, while
+ * gwenesis_diag_stuck_iters stays near 0 forever. */
+unsigned int gwenesis_diag_aerr_count = 0;
+unsigned int gwenesis_diag_aerr_first_addr = 0;
+unsigned int gwenesis_diag_aerr_first_fc = 0;
+unsigned int gwenesis_diag_aerr_first_write = 0;
+unsigned int gwenesis_diag_aerr_first_pc = 0;
+
 
 /* ======================================================================== */
 /* =============================== CALLBACKS ============================== */
@@ -289,8 +318,23 @@ void m68k_run(unsigned int cycles)
   error("[%d][%d] m68k run to %d cycles (%x), irq mask = %x (%x)\n", v_counter, m68k.cycles, cycles, m68k.pc,FLAG_INT_MASK, CPU_INT_LEVEL);
 #endif
 
+  unsigned int gwenesis_diag_iter_count = 0;
+
   while (m68k.cycles < cycles)
   {
+    /* Diagnostic watchdog check - see globals/comment above m68k struct.
+     * Placed at the top of the loop body so it catches a stall on the
+     * very next iteration after cycles stop advancing, rather than
+     * waiting for the (never-reached) natural loop exit. */
+    if (++gwenesis_diag_iter_count > GWENESIS_DIAG_WATCHDOG_LIMIT)
+    {
+      gwenesis_diag_stuck_pc = m68k_get_reg(M68K_REG_PC);
+      gwenesis_diag_stuck_ir = REG_IR;
+      gwenesis_diag_stuck_iters = gwenesis_diag_iter_count;
+      gwenesis_diag_stuck_tripped = 1;
+      break;
+    }
+
     /* Set tracing accodring to T1. */
     m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
 

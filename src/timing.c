@@ -1,15 +1,29 @@
-#include <osd.h>
+/*
+ * Timing helpers for Gwenesis EADK
+ *
+ * Stripped down from the original draft: osd_installtimer() and
+ * osd_nofrendo_ticks() were nofrendo's (NES core) timer-hook API - nothing
+ * in gwenesis calls them, so they've been removed. What's left are plain
+ * EADK timing wrappers, kept around for a future FPS counter or frame-pacing
+ * logic if you want one later.
+ */
+ 
 #include <eadk.h>
-
-int timerfreq = 50;
-
-//Seemingly, this will be called only once. Should call func with a freq of frequency,
-int osd_installtimer(int frequency, void *func, int funcsize, void *counter, int countersize)
+#include <stdint.h>
+ 
+static uint64_t g_start_ms = 0;
+ 
+void timing_init(void)
 {
-	timerfreq = frequency;
-	return 0;
+    g_start_ms = eadk_timing_millis();
 }
-
-int osd_nofrendo_ticks(void) {
-	return eadk_timing_millis() / (1000 / timerfreq);
+ 
+uint64_t timing_get_ms(void)
+{
+    return eadk_timing_millis();
+}
+ 
+void timing_delay_ms(uint32_t ms)
+{
+    eadk_timing_msleep(ms);
 }
